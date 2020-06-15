@@ -19,6 +19,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import sqlite3
 import re
+import os
+import traceback
 
 from datetime import datetime
 conn = sqlite3.connect('dw_stock_data')
@@ -28,6 +30,15 @@ plt.figure(figsize=(16,9))
 #global variables
 TOKEN = "977165415:AAEXEkUgbDiOoEkzXgxRlyicAvGad-MT6v4"
 URL = "https://api.telegram.org/bot{}/".format(TOKEN)
+
+alpha_key = 'HV7G47I5ENZV85XG'
+request_session = requests.session()
+
+#alpha vantage endpoints
+url_intraday = 'https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol={}&interval={}&apikey={}'
+url_daily = 'https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={}&apikey={}'
+url_search = 'https://www.alphavantage.co/query?function=SYMBOL_SEARCH&keywords={}&apikey={}'
+
 
 emoji1 = u'\U000027A1'   #seta pra direita
 db = DBHelper()
@@ -137,8 +148,8 @@ def watchlist(updates, chat):
             elif updates["result"][0]["message"]["text"] == 'pronto' or updates["result"][0]["message"]["text"] == 'Pronto':
                 continue
             else:
-                # text = updates["result"][0]["message"]["text"]
-                # db.delete_item(text, chat, items)
+                text = updates["result"][0]["message"]["text"]
+                db.delete_item(text, chat)
                 continue
         else:
             db.add_item(text, chat)
@@ -171,26 +182,43 @@ def get_charts(updates, chat):
 
     item = updates["result"][0]["message"]["text"]
     
-    stock_data_actual = yf.download(
-        tickers = item,
-        period = "1d",
-        interval = "5m",
-        group_by = "ticker"
-    )
+    try:
+        data = json.loads(request_session.get(url=url_intraday.format(item,'5min',alpha_key)).content)
+    except:
+        send_message('algum problema no request',chat)
 
-    stock_data_actual2 = stock_data_actual.tail(20)
+    time_span = list(data)[1] #primeiro elemento sao metadados
 
-    fig = go.Figure(data=[go.Candlestick(x=stock_data_actual2.index,
-                                        open=stock_data_actual2['Open'],
-                                        high=stock_data_actual2['High'],
-                                        low=stock_data_actual2['Low'],
-                                        close=stock_data_actual2['Close']
+    open = []
+    high = []
+    low = []
+    close = []
+
+    for i in list(data[time_span])[0:5]:
+        open.append(data[time_span][i]['1. open'])
+        high.append(data[time_span][i]['2. high'])
+        low.append(data[time_span][i]['3. low'])
+        close.append(data[time_span][i]['4. close'])
+
+    fig = go.Figure(data=[go.Candlestick(x=list(data.get(time_span))[0:5],
+                                        open=open,
+                                        high=high,
+                                        low=low,
+                                        close=close
                                         )
-                         ]
+                        ]
                     )
+    fig = fig.update_layout(xaxis_rangeslider_visible=False)
+    
+    print('gerou figura')
 
-    fig.write_image('/home/yuguro/Desktop/py_envs/stock_project/temp_chart1.png')
+    try:
+        fig.write_image('temp_chart.png')
+    except Exception:
+        traceback.print_exc()
+    
     send_image(chat)
+    # os.remove('temp_chart.png'
 
 
 def rename(column):
@@ -210,7 +238,6 @@ def get_latest(updates,chat):
     updates = get_updates(last_update_id)
 
     item = updates["result"][0]["message"]["text"]
-    item2 = re.sub(r"(3\.SA)",r"",item.lower())
 
     # columns = [col for col in stocks.columns if item2 in columns]
 
@@ -245,17 +272,14 @@ def monitoring(updates,chat):
         # column_stock2 = [datetime.datetime.strptime(i[:16],"%Y-%m-%dT%H:%M") for i in column_array]
         line = stock_data_recent2.loc[0,('datetime')] + stock_data_recent2.loc[0,(stock,'Open')] + stock_data_recent2.loc[0,(stock,'Close')]
         lines.append(line)
-        
-        message = formating(lines,chats)
 
 
 def send_image(chat):
-    files = {'photo': open('/home/yuguro/Desktop/py_envs/stock_project/temp_chart1.png','rb')}
+    files = {'photo': open('temp_chart.png','rb')}
     data = {'chat_id': chat}
     r = requests.post('https://api.telegram.org/bot977165415:AAEXEkUgbDiOoEkzXgxRlyicAvGad-MT6v4/sendPhoto',
                   files=files,
                   data = data)
-    print(r.status_code,r.reason, r.content)
 
 
 # files = {'photo': open('./saved/{}.jpg'.format(user_id), 'rb')}
@@ -289,7 +313,6 @@ def formating(text,chat_id,reply_markup=None):
     i0 = 0
     for i in text:
         len_total = len_total + len(i)
-    print(len_total)
     if len_total < limit:
         for i in text:
             if i:
@@ -310,7 +333,6 @@ def formating(text,chat_id,reply_markup=None):
                     i = '\n' + emoji1 + i
                 content = content + i
         n = int(len_total/limit)
-        print(content)
         while i0 <= n:
             i1 = i0 + 1
             partial_msg = content[i0*limit:i1*limit]
